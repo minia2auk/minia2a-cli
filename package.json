@@ -1,0 +1,37 @@
+{
+  "name": "minia2a-cli",
+  "version": "1.1.5",
+  "description": "CLI to discover and call x402-payable APIs on minia2a.uk. Free signed-wallet trials, USDC pay-per-call on Base.",
+  "main": "cli.js",
+  "bin": {
+    "minia2a": "./cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "keywords": [
+    "x402",
+    "minia2a",
+    "ai-agent",
+    "micropayments",
+    "usdc",
+    "base",
+    "cli",
+    "agent-economy",
+    "m2m",
+    "web3"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minia2auk/minia2a-cli.git"
+  },
+  "homepage": "https://minia2a.uk",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}
