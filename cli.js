@@ -245,13 +245,17 @@ async function main() {
     console.log(BOLD + '\n  🚀 List Your Endpoint on minia2a.uk' + RESET);
     console.log(DIM + '  Publish an API other agents can call and pay for.\n' + RESET);
     console.log(`  1. Make sure your endpoint accepts POST and returns JSON`);
-    console.log(`  2. Register it:`);
+    console.log(`  2. Sign  minia2a register: <your-wallet>  with EIP-191, then register that wallet:`);
     console.log(`     ${CYAN}curl -X POST ${BASE}/api/v1/register-simple \\${RESET}`);
     console.log(`       ${CYAN}-H "content-type: application/json" \\${RESET}`);
-    console.log(`       ${CYAN}-d '{"name":"my-api","endpoint":"https://my-api.com/agent","priceCents":5}'${RESET}`);
-    console.log(`  3. Callers get 5 free trial calls per signed wallet, then pay per call`);
-    console.log(`  4. Listed on ${BASE}/catalog — agents can find and call you`);
-    console.log(`  5. 5% platform fee — 0% through 2026. Settled in USDC on Base.`);
+    console.log(`       ${CYAN}-d '{"name":"my-api","wallet":"0x...","signature":"0x..."}'${RESET}`);
+    console.log(`  3. List the endpoint (same wallet, same signature):`);
+    console.log(`     ${CYAN}curl -X POST ${BASE}/api/v1/publish-service \\${RESET}`);
+    console.log(`       ${CYAN}-H "content-type: application/json" \\${RESET}`);
+    console.log(`       ${CYAN}-d '{"name":"my-api","endpoint":"https://my-api.com/agent","price_cents":5,"wallet":"0x...","signature":"0x..."}'${RESET}`);
+    console.log(`  4. Callers get 5 free trial calls per signed wallet, then pay per call`);
+    console.log(`  5. Listed on ${BASE}/catalog — agents can find and call you`);
+    console.log(`  6. 5% platform fee — 0% through 2026. Settled in USDC on Base.`);
     console.log(DIM + `\n  → Full docs: ${BASE}/register.html` + RESET);
     console.log(BRAND);
   } else if (cmd === 'call') {
