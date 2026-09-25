@@ -1,6 +1,6 @@
 {
   "name": "minia2a-cli",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "CLI to discover and call x402-payable APIs on minia2a.uk. Free signed-wallet trials, USDC pay-per-call on Base.",
   "main": "cli.js",
   "bin": {

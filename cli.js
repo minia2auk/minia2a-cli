@@ -12,27 +12,51 @@ const { Wallet } = require('ethers');
 // per-process id would count every CLI invocation as a new agent and inflate it.
 function agentId() {
   if (process.env.MINIA2A_AGENT_ID) return process.env.MINIA2A_AGENT_ID;
-  const dir = path.join(os.homedir(), '.minia2a');
-  const file = path.join(dir, 'agent-id');
-  try {
-    const existing = fs.readFileSync(file, 'utf8').trim();
-    if (existing) return existing;
-  } catch (e) { /* not created yet */ }
+  // Two locations exist across our published clients: this one historically used
+  // ~/.minia2a/agent-id, while `minia2a-mcp`, `minia2a-client` and `@minia2a/sdk`
+  // read ~/.minia2a-agent-id (the path the gateway's adoption.go names). Reading
+  // only one of them mints a second id on a machine that already has one, so that
+  // machine is counted as two agents. Read both, in that order.
+  const candidates = [
+    path.join(os.homedir(), '.minia2a', 'agent-id'),
+    path.join(os.homedir(), '.minia2a-agent-id'),
+  ];
+  for (const file of candidates) {
+    try {
+      const existing = fs.readFileSync(file, 'utf8').trim();
+      if (existing) return existing;
+    } catch (e) { /* not created yet — fall through to the next candidate */ }
+  }
   const id = 'agent:' + crypto.randomUUID();
   try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, id, { mode: 0o600 });
+    fs.mkdirSync(path.dirname(candidates[0]), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(candidates[0], id, { mode: 0o600 });
   } catch (e) { /* read-only home — keep the in-memory id */ }
   return id;
 }
 
-function baseHeaders() {
-  return { 'Accept': 'application/json', 'X-Agent-ID': agentId(), 'User-Agent': 'minia2a-cli' };
+// The id identifies us to our own gateway. The catalog carries caller-listed
+// endpoints on other hosts (the external-api category), and `trial` calls
+// whichever one it resolved — so the header is gated on the host. A stable
+// per-machine identifier must not travel to a third party.
+function isFirstParty(url) {
+  try {
+    const h = new URL(url).hostname;
+    return h === 'minia2a.uk' || h.endsWith('.minia2a.uk');
+  } catch (e) {
+    return false;
+  }
+}
+
+function baseHeaders(url) {
+  const headers = { 'Accept': 'application/json', 'User-Agent': 'minia2a-cli' };
+  if (isFirstParty(url)) headers['X-Agent-ID'] = agentId();
+  return headers;
 }
 
 function fetch(url, opts = {}) {
   return new Promise((resolve, reject) => {
-    const options = { ...opts, headers: { ...baseHeaders(), ...(opts.headers || {}) } };
+    const options = { ...opts, headers: { ...baseHeaders(url), ...(opts.headers || {}) } };
     https.get(url, options, res => {
       let data = '';
       res.on('data', c => data += c);
@@ -47,7 +71,7 @@ function post(url, body, extraHeaders = {}) {
     const options = {
       method: 'POST',
       headers: {
-        ...baseHeaders(),
+        ...baseHeaders(url),
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
         ...extraHeaders,
