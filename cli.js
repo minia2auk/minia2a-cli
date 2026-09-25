@@ -13,13 +13,21 @@ const { Wallet } = require('ethers');
 function agentId() {
   if (process.env.MINIA2A_AGENT_ID) return process.env.MINIA2A_AGENT_ID;
   // Two locations exist across our published clients: this one historically used
-  // ~/.minia2a/agent-id, while `minia2a-mcp`, `minia2a-client` and `@minia2a/sdk`
-  // read ~/.minia2a-agent-id (the path the gateway's adoption.go names). Reading
-  // only one of them mints a second id on a machine that already has one, so that
-  // machine is counted as two agents. Read both, in that order.
+  // ~/.minia2a/agent-id, while `minia2a-mcp`, `minia2a-client`, `@minia2a/sdk`
+  // and the skill use ~/.minia2a-agent-id (the path the gateway's adoption.go
+  // names). Reading only one of them mints a second id on a machine that already
+  // has one, so that machine is counted as two agents. Read both.
+  //
+  // The ORDER is not cosmetic. A machine that holds both files is exactly the
+  // machine this was written for — an older CLI wrote ~/.minia2a/agent-id, then
+  // an older client failed to see it and minted ~/.minia2a-agent-id. Reading
+  // both only converges if every client prefers the same one; 1.1.8 preferred
+  // the CLI-era path while the other four preferred the canonical path, so the
+  // CLI still reported a different identity than the packages installed next to
+  // it. Prefer the gateway-documented path, here and everywhere.
   const candidates = [
-    path.join(os.homedir(), '.minia2a', 'agent-id'),
     path.join(os.homedir(), '.minia2a-agent-id'),
+    path.join(os.homedir(), '.minia2a', 'agent-id'),
   ];
   for (const file of candidates) {
     try {
