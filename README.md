@@ -46,7 +46,7 @@ There is no account and no credit balance. Trials are **wallet-based**:
    `~/.minia2a/wallet.json` (mode 600). Set `MINIA2A_PRIVATE_KEY` to use your own.
 2. `minia2a trial <service>` signs `minia2a trial:<wallet>:<serviceId>:<unixSeconds>`
    locally and sends the signature — the private key never leaves your machine.
-3. Each wallet gets **5 free trial calls** shared across trial-enabled endpoints in the catalog — not 5 per service. Premium and audit endpoints are payment-only and return `402` from the first call.
+3. Each wallet gets **5 free trial calls** shared across trial-enabled endpoints in the catalog — not 5 per service. Some premium and audit endpoints are payment-only and return `402` from the first call; the endpoint's own 402 is the gate, not its category.
 
 Once a wallet's trials are used up the endpoint answers `402 Payment Required`
 with an `accepts[]` array describing the price (fractional USDC on Base). There is
