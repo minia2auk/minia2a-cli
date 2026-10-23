@@ -157,13 +157,34 @@ async function main() {
     console.log(BRAND);
   } else if (cmd === 'trial') {
     const svcName = process.argv[3];
-    if (!svcName) {
+    const trialUsage = (exitCode) => {
       console.log(BOLD + '\n  Usage:' + RESET + ' minia2a trial <service-name> [--input \'{"key":"val"}\']');
       console.log(DIM + '  Spends one of your 5 free trial calls. The wallet is signed locally —' + RESET);
       console.log(DIM + '  no registration, no payment, and the key never leaves this machine.\n' + RESET);
       console.log('  Example: minia2a trial x402-time');
       console.log('  Example: minia2a trial x402-gas --input \'{"chainId":1}\'');
-      process.exit(1);
+      process.exit(exitCode);
+    };
+    // `--help` used to fall through to the catalog lookup and print
+    // `Service "--help" not found`, which reads like a broken CLI to a first-time
+    // user. A help flag is not a service name.
+    if (!svcName || svcName === '--help' || svcName === '-h' || svcName === 'help') {
+      trialUsage(svcName ? 0 : 1);
+    }
+    // Unknown flags used to be dropped on the floor: `trial X --param k=v` sent an
+    // empty body, the endpoint answered 400 "…required", and nothing in the output
+    // said the flag had been ignored. Refuse loudly instead of silently calling
+    // with the wrong input.
+    const TRIAL_FLAGS = new Set(['--input', '--json']);
+    const extra = process.argv.slice(4);
+    for (let i = 0; i < extra.length; i++) {
+      const tok = extra[i];
+      if (tok === '--input') { i++; continue; }        // its value is not a flag
+      if (tok.startsWith('-')) {
+        console.log(RED + `\n  Unknown option: ${tok}` + RESET);
+        console.log(DIM + '  Accepted: --input \'{"key":"val"}\', --json' + RESET);
+        trialUsage(2);
+      }
     }
     const { data: d } = await fetch(BASE + '/api/services');
     const svc = (d.services || []).find(s => s.name === svcName || s.id === svcName);
@@ -180,7 +201,11 @@ async function main() {
 
     let inputBody = {};
     const inputIdx = process.argv.indexOf('--input');
-    if (inputIdx !== -1 && process.argv[inputIdx + 1]) {
+    if (inputIdx !== -1 && !process.argv[inputIdx + 1]) {
+      console.log(RED + '  --input needs a JSON value: --input \'{"key":"val"}\'' + RESET);
+      process.exit(2);
+    }
+    if (inputIdx !== -1) {
       try { inputBody = JSON.parse(process.argv[inputIdx + 1]); } catch(e) {
         console.log(RED + '  Invalid JSON for --input' + RESET);
         process.exit(1);
@@ -251,6 +276,14 @@ async function main() {
         console.log(`  ${CYAN}${k}:${RESET} ${val}`);
       }
       if (keys.length > 8) console.log(DIM + `  ... and ${keys.length - 8} more fields` + RESET);
+    }
+    // A 400 the gateway marks `inputError` is the caller's request shape, not the
+    // endpoint failing. A first run with no --input lands here, and the field dump
+    // above names the missing thing without saying what to do about it, so a
+    // newcomer reads "this is broken" instead of "pass the field it just named".
+    if (status === 400 && result && result.inputError && inputIdx === -1) {
+      console.log(`\n  ${BOLD}Retry with the fields named above:${RESET}`);
+      console.log(`    minia2a trial ${svcName} --input '{"<field>":"<value>"}'`);
     }
     console.log(DIM + `\n  💡 ${svc.trialCount || 0} trials used on this endpoint. 5 free per wallet across the catalog.` + RESET);
     console.log(BRAND);
@@ -326,7 +359,7 @@ async function main() {
   } else if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(BOLD + '\n  ⚡ minia2a' + RESET + DIM + ' — CLI for the agent-to-agent API marketplace\n' + RESET);
     console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--all, --json]`);
-    console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call (signed wallet, 5 max)`);
+    console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}']`);
     console.log(`  ${BOLD}minia2a call <name>${RESET}     Show service details [--json]`);
     console.log(`  ${BOLD}minia2a stats${RESET}          Live platform stats [--json]`);
     console.log(`  ${BOLD}minia2a wallet${RESET}         Your local wallet + how payment works`);
