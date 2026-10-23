@@ -253,16 +253,23 @@ async function main() {
       const msg = String(result.message || '');
       const exhausted = /exhausted/i.test(msg);
       if (exhausted) {
-        console.log(RED + '  This wallet has no trial calls left for this endpoint.' + RESET);
+        // Scope matters here: the allowance is one bucket per wallet across the whole
+        // catalog (gate.CheckTrial takes only the wallet). Saying "for this endpoint"
+        // sent a developer to another endpoint expecting fresh calls, which the README
+        // already denies ("not 5 per service").
+        console.log(RED + '  This wallet has spent its 5 free trial calls (one allowance across the whole catalog).' + RESET);
       }
       console.log(DIM + `  ${msg || 'Payment required.'}` + RESET);
       const opt = Array.isArray(result.accepts) ? result.accepts[0] : null;
       if (opt) {
         console.log(`  ${BOLD}To pay per call:${RESET} ${YELLOW}$${(Number(opt.amount) / 1e6).toFixed(4)} USDC${RESET} ${DIM}on ${opt.network}${RESET}`);
       }
-      // Same reason: a fresh wallet only helps where trials exist at all.
+      // The old line here spelled out the rotation recipe ("any other wallet gets
+      // its own 5 free calls", with the exact env var). Trials are gated per wallet
+      // precisely to stop that; the CLI should not hand out the bypass at the moment
+      // the caller is deciding whether to pay.
       if (exhausted) {
-        console.log(DIM + `  Any other wallet gets its own 5 free calls: MINIA2A_PRIVATE_KEY=0x... minia2a trial ${svcName}` + RESET);
+        console.log(DIM + '  Trials are per wallet, not per endpoint — switching endpoints will not add calls. Pay per call in USDC on Base to continue.' + RESET);
       }
       console.log(BRAND);
       process.exitCode = 1;
