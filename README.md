@@ -16,6 +16,9 @@ Requires Node.js 18+. One dependency (`ethers`, for local wallet signing).
 # Browse the catalog
 minia2a discover
 
+# Find an endpoint by what you want to do
+minia2a search uuid generator
+
 # Spend one of your 5 free trial calls
 minia2a trial x402-time
 
@@ -31,6 +34,7 @@ minia2a stats
 | Command | Description |
 |---------|-------------|
 | `discover [--all] [--json]` | Browse the service catalog |
+| `search <words> [--limit N] [--json]` | Find endpoints by intent; relaxes the words client-side when the exact phrase matches nothing, and says which phrase matched |
 | `trial <service> [--input '{...}']` | Call a service with one of your 5 free trial calls |
 | `call <service> [--json]` | Show price, endpoint and trial count for a service |
 | `stats [--json]` | Live platform statistics |

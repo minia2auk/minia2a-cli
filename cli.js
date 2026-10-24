@@ -143,6 +143,77 @@ async function main() {
       console.log(DIM + `\n  ... and ${svcs.length - 15} more. Use --all to see everything.` + RESET);
     }
     console.log(BRAND);
+  } else if (cmd === 'search') {
+    // The catalog's `q` is token-AND: every word must appear in id+name+description,
+    // so a phrasing the description does not use returns 0 and a caller reads that
+    // as "this marketplace has no such capability". Measured 2026-10-24 over 40
+    // natural phrasings: 10 did not surface the endpoint that existed, and 7 of
+    // those returned nothing at all ("uuid generator", "url shortener", "email
+    // validation"). The server-side fix is a stem/prefix match; until then this
+    // command relaxes *client-side* and says so, rather than printing an empty
+    // list as an answer.
+    const argv = process.argv.slice(3);
+    const li = argv.indexOf('--limit');
+    let limit = 10;
+    if (li !== -1) { limit = Math.max(1, parseInt(argv[li + 1], 10) || 10); argv.splice(li, 2); }
+    const words = argv.filter(a => !a.startsWith('--'));
+    if (!words.length) {
+      console.log(BOLD + '\n  Usage:' + RESET + ' minia2a search <words> [--limit N]');
+      console.log(DIM + '  Finds endpoints by what you want to do, in plain words.\n' + RESET);
+      console.log('  Example: minia2a search uuid generator');
+      console.log('  Example: minia2a search "url shortener" --limit 5');
+      process.exit(1);
+    }
+
+    const get = async (q) => {
+      const { data } = await fetch(BASE + '/api/services?limit=50&q=' + encodeURIComponent(q));
+      return (data && data.services) || [];
+    };
+    const attempts = [];
+    const seen = new Map();
+    const take = (q, rows) => {
+      if (attempts.some(a => a.q === q)) return;
+      attempts.push({ q, n: rows.length });
+      for (const s of rows) if (!seen.has(s.id)) seen.set(s.id, s);
+    };
+
+    take(words.join(' '), await get(words.join(' ')));
+    if (!seen.size && words.length > 1) {
+      // Drop one word at a time before falling back to single words: "uuid
+      // generator" -> "uuid" is the useful retry, and it keeps the ranking of
+      // the longest query that still matched.
+      for (let i = 0; i < words.length; i++) {
+        const q = words.slice(0, i).concat(words.slice(i + 1)).join(' ');
+        take(q, await get(q));
+      }
+    }
+    if (!seen.size) for (const w of words) take(w, await get(w));
+
+    const results = [...seen.values()].slice(0, limit);
+    if (JSON_MODE) {
+      console.log(JSON.stringify({ query: words.join(' '), attempts, results }, null, 2));
+      if (!results.length) process.exit(1);
+      return;
+    }
+
+    console.log(BOLD + `\n  🔎 ${words.join(' ')}` + RESET + DIM + ` — ${results.length} match(es)` + RESET);
+    if (attempts.length > 1) {
+      const used = attempts.filter(a => a.n > 0).map(a => `"${a.q}"=${a.n}`).join(', ');
+      console.log(DIM + `  All words together matched nothing; relaxed to: ${used}` + RESET);
+    }
+    if (!results.length) {
+      console.log(DIM + '  The catalog search needs every word to appear in an endpoint\'s text.' + RESET);
+      console.log(DIM + '  Try fewer or more literal words, e.g. "gas" instead of "fuel cost".' + RESET);
+      console.log(BRAND);
+      process.exit(1);
+    }
+    for (const s of results) {
+      const price = (Number(s.priceCents || 0) / 100).toFixed(s.priceCents < 100 ? 3 : 2);
+      console.log(`  ${CYAN}${s.id}${RESET} ${DIM}${s.name}${RESET} | ${YELLOW}$${price}${RESET} | ${DIM}${(s.description || '').slice(0, 90)}${RESET}`);
+    }
+    console.log(DIM + `\n  → Try one free: minia2a trial ${results[0].id}` + RESET);
+    console.log(DIM + '  → Details:     minia2a call <id>' + RESET);
+    console.log(BRAND);
   } else if (cmd === 'stats') {
     const { data: d } = await fetch(BASE + '/api/stats');
     if (JSON_MODE) { console.log(JSON.stringify(d, null, 2)); return; }
@@ -190,7 +261,7 @@ async function main() {
     const svc = (d.services || []).find(s => s.name === svcName || s.id === svcName);
     if (!svc) {
       console.log(RED + `\n  Service "${svcName}" not found.` + RESET);
-      console.log(DIM + '  Try: minia2a discover' + RESET);
+      console.log(DIM + '  Try: minia2a search <words> or minia2a discover' + RESET);
       process.exit(1);
     }
     const endpoint = svc.url || svc.endpoint;
@@ -340,7 +411,7 @@ async function main() {
     const { data: d } = await fetch(BASE + '/api/services');
     const svc = (d.services || []).find(s => s.name === svcName || s.id === svcName);
     if (!svc) {
-      console.log(`Service "${svcName}" not found. Try: minia2a discover`);
+      console.log(`Service "${svcName}" not found. Try: minia2a search ${svcName}`);
       process.exit(1);
     }
     if (JSON_MODE) {
@@ -366,6 +437,7 @@ async function main() {
   } else if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(BOLD + '\n  ⚡ minia2a' + RESET + DIM + ' — CLI for the agent-to-agent API marketplace\n' + RESET);
     console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--all, --json]`);
+    console.log(`  ${BOLD}minia2a search <words>${RESET} Find endpoints by intent [--limit N, --json]`);
     console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}']`);
     console.log(`  ${BOLD}minia2a call <name>${RESET}     Show service details [--json]`);
     console.log(`  ${BOLD}minia2a stats${RESET}          Live platform stats [--json]`);
