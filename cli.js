@@ -62,13 +62,27 @@ function baseHeaders(url) {
   return headers;
 }
 
+// The gateway answers a served trial with its own quota headers:
+// x-trial-mode=wallet, x-trial-max=5, x-trial-remaining=N. The CLI used to drop
+// them and print the catalog's lifetime trialCount instead -- "2 trials used on
+// this endpoint" on a wallet that had spent nothing reads as the caller's usage.
+function trialQuota(headers) {
+  if (!headers) return null;
+  const remaining = headers['x-trial-remaining'];
+  const max = headers['x-trial-max'];
+  const mode = headers['x-trial-mode'];
+  if (remaining === undefined && max === undefined && mode === undefined) return null;
+  const num = v => (v === undefined || v === null || v === '' || isNaN(Number(v))) ? null : Number(v);
+  return { mode: mode || null, remaining: num(remaining), max: num(max) };
+}
+
 function fetch(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const options = { ...opts, headers: { ...baseHeaders(url), ...(opts.headers || {}) } };
     https.get(url, options, res => {
       let data = '';
       res.on('data', c => data += c);
-      res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } catch(e) { resolve({ status: res.statusCode, data }); } });
+      res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data), headers: res.headers }); } catch(e) { resolve({ status: res.statusCode, data, headers: res.headers }); } });
     }).on('error', reject);
   });
 }
@@ -88,7 +102,7 @@ function post(url, body, extraHeaders = {}) {
     const req = https.request(url, options, res => {
       let data = '';
       res.on('data', c => data += c);
-      res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } catch(e) { resolve({ status: res.statusCode, data }); } });
+      res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data), headers: res.headers }); } catch(e) { resolve({ status: res.statusCode, data, headers: res.headers }); } });
     });
     req.on('error', reject);
     req.write(payload);
@@ -104,8 +118,8 @@ function loadWallet() {
   const envKey = process.env.MINIA2A_PRIVATE_KEY;
   if (envKey) return new Wallet(envKey.startsWith('0x') ? envKey : '0x' + envKey);
 
-  const dir = path.join(os.homedir(), '.minia2a');
-  const file = path.join(dir, 'wallet.json');
+  const dir = WALLET_DIR;
+  const file = WALLET_FILE;
   try {
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (saved.privateKey) return new Wallet(saved.privateKey);
@@ -118,6 +132,11 @@ function loadWallet() {
   } catch (e) { /* read-only home — the wallet just won't persist */ }
   return w;
 }
+
+// Same paths loadWallet writes, named once so `wallet` can print the file it
+// actually used instead of the literal string "~/.minia2a/wallet.json".
+const WALLET_DIR = path.join(os.homedir(), '.minia2a');
+const WALLET_FILE = path.join(WALLET_DIR, 'wallet.json');
 
 const CYAN = '\x1b[36m', GREEN = '\x1b[32m', YELLOW = '\x1b[33m', DIM = '\x1b[2m', BOLD = '\x1b[1m', RED = '\x1b[31m', RESET = '\x1b[0m';
 const JSON_MODE = process.argv.includes('--json');
@@ -229,7 +248,7 @@ async function main() {
   } else if (cmd === 'trial') {
     const svcName = process.argv[3];
     const trialUsage = (exitCode) => {
-      console.log(BOLD + '\n  Usage:' + RESET + ' minia2a trial <service-name> [--input \'{"key":"val"}\']');
+      console.log(BOLD + '\n  Usage:' + RESET + ' minia2a trial <service-name> [--input \'{"key":"val"}\'] [--json]');
       console.log(DIM + '  Spends one of your 5 free trial calls. The wallet is signed locally —' + RESET);
       console.log(DIM + '  no registration, no payment, and the key never leaves this machine.\n' + RESET);
       console.log('  Example: minia2a trial x402-time');
@@ -251,6 +270,12 @@ async function main() {
     for (let i = 0; i < extra.length; i++) {
       const tok = extra[i];
       if (tok === '--input') { i++; continue; }        // its value is not a flag
+      // TRIAL_FLAGS listed --json as accepted while this loop rejected every
+      // dash-token, so `trial X --json` answered "Unknown option: --json" and
+      // told the caller --json was accepted in the same breath. The branch that
+      // prints machine-readable trial output was unreachable code. Test the set
+      // the message already advertises, not a second hand-written list.
+      if (TRIAL_FLAGS.has(tok)) continue;
       if (tok.startsWith('-')) {
         console.log(RED + `\n  Unknown option: ${tok}` + RESET);
         console.log(DIM + '  Accepted: --input \'{"key":"val"}\', --json' + RESET);
@@ -290,14 +315,20 @@ async function main() {
     const signature = await wallet.signMessage(`minia2a trial:${wallet.address}:${svc.id}:${ts}`);
 
     const url = endpoint + (endpoint.includes('?') ? '&' : '?') + 'wallet=' + wallet.address;
-    console.log(BOLD + `\n  🔬 Trial: ${svc.name}` + RESET + DIM + ` — ${svc.category}` + RESET);
-    console.log(DIM + `  Wallet: ${wallet.address}` + RESET);
-    console.log(DIM + `  Calling: ${url}` + RESET);
+    // --json must emit nothing but JSON. These three lines printed unconditionally,
+    // so `minia2a trial X --json | jq` choked on the ANSI-coloured preamble. The
+    // call metadata they carried rides inside the `trial` object below instead.
+    if (!JSON_MODE) {
+      console.log(BOLD + `\n  🔬 Trial: ${svc.name}` + RESET + DIM + ` — ${svc.category}` + RESET);
+      console.log(DIM + `  Wallet: ${wallet.address}` + RESET);
+      console.log(DIM + `  Calling: ${url}` + RESET);
+    }
 
-    const { status, data: result } = await post(url, inputBody, {
+    const { status, data: result, headers } = await post(url, inputBody, {
       'X-Wallet-Signature': signature,
       'X-Trial-Timestamp': ts,
     });
+    const quota = trialQuota(headers);
 
     // Exit code contract (1.1.3): the trial succeeded iff the gateway answered
     // 200. Before this, the 402 path printed the refusal and returned without
@@ -307,7 +338,15 @@ async function main() {
     // a successful call. Every other failure path here already exits 1; this one
     // was the outlier. process.exitCode (not process.exit) so stdout still flushes.
     if (JSON_MODE) {
-      console.log(JSON.stringify(result, null, 2));
+      // The allowance lives in response headers, not in the body. Machine-readable
+      // output that dropped them left an agent no way to know how many free calls
+      // it had left before it started paying. Body is preserved as-is; the quota
+      // rides alongside it under its own key.
+      const meta = { wallet: wallet.address, service: svc.id, ...(quota || {}) };
+      const out = (result && typeof result === 'object' && !Array.isArray(result))
+        ? { ...result, trial: meta }
+        : { status, body: result, trial: meta };
+      console.log(JSON.stringify(out, null, 2));
       if (status !== 200) process.exitCode = 1;
       return;
     }
@@ -363,17 +402,40 @@ async function main() {
       console.log(`\n  ${BOLD}Retry with the fields named above:${RESET}`);
       console.log(`    minia2a trial ${svcName} --input '{"<field>":"<value>"}'`);
     }
-    console.log(DIM + `\n  💡 ${svc.trialCount || 0} trials used on this endpoint. 5 free per wallet across the catalog.` + RESET);
+    if (quota && quota.remaining !== null && quota.max !== null) {
+      console.log(DIM + `\n  💡 ${quota.remaining} of ${quota.max} free trial calls left for this wallet (one bucket across the whole catalog).` + RESET);
+    } else {
+      // No quota header: say what the number IS, so it is not read as the
+      // caller's own spend. It is the endpoint's lifetime total.
+      console.log(DIM + `\n  💡 ${svc.trialCount || 0} trial calls served by this endpoint so far. 5 free per wallet across the catalog.` + RESET);
+    }
     console.log(BRAND);
     // Anything that is not a 200 is not a completed trial, whatever it printed.
     // Covers the 400/5xx paths the early sniff above does not special-case.
     if (status !== 200) process.exitCode = 1;
   } else if (cmd === 'wallet') {
     const wallet = loadWallet();
+    const fromEnv = Boolean(process.env.MINIA2A_PRIVATE_KEY);
+    // --json was documented as applying to "any command" and silently ignored
+    // here: `wallet --json` printed the human prose, so a script could not read
+    // the address it is supposed to pay from.
+    if (JSON_MODE) {
+      console.log(JSON.stringify({
+        address: wallet.address,
+        network: 'base',
+        keySource: fromEnv ? 'env:MINIA2A_PRIVATE_KEY' : 'file',
+        keyFile: fromEnv ? null : WALLET_FILE,
+        trialAllowance: 5,
+        docs: BASE + '/docs',
+      }, null, 2));
+      return;
+    }
     console.log(BOLD + '\n  💳 Your wallet' + RESET);
     console.log(DIM + '  Self-custody, generated locally. minia2a never holds the key.\n' + RESET);
     console.log(`  ${BOLD}Address:${RESET}  ${CYAN}${wallet.address}${RESET}`);
-    console.log(`  ${BOLD}Key file:${RESET} ${DIM}~/.minia2a/wallet.json (chmod 600), or set MINIA2A_PRIVATE_KEY${RESET}\n`);
+    console.log(`  ${BOLD}Key file:${RESET} ${DIM}${fromEnv ? 'MINIA2A_PRIVATE_KEY (environment)' : WALLET_FILE + ' (chmod 600)'}${RESET}`);
+    if (!fromEnv) console.log(DIM + '  Or set MINIA2A_PRIVATE_KEY to use a key you already hold.' + RESET);
+    console.log('');
     console.log(`  ${BOLD}1. Spend a free trial${RESET} — one of 5 per wallet, no registration:`);
     console.log(`     ${CYAN}minia2a trial x402-time${RESET}`);
     console.log(`\n  ${BOLD}2. Pay per call after the trials run out${RESET} — the endpoint answers 402`);
@@ -438,12 +500,12 @@ async function main() {
     console.log(BOLD + '\n  ⚡ minia2a' + RESET + DIM + ' — CLI for the agent-to-agent API marketplace\n' + RESET);
     console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--all, --json]`);
     console.log(`  ${BOLD}minia2a search <words>${RESET} Find endpoints by intent [--limit N, --json]`);
-    console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}']`);
+    console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}', --json]`);
     console.log(`  ${BOLD}minia2a call <name>${RESET}     Show service details [--json]`);
     console.log(`  ${BOLD}minia2a stats${RESET}          Live platform stats [--json]`);
-    console.log(`  ${BOLD}minia2a wallet${RESET}         Your local wallet + how payment works`);
+    console.log(`  ${BOLD}minia2a wallet${RESET}         Your local wallet + how payment works [--json]`);
     console.log(`  ${BOLD}minia2a register${RESET}       List your own endpoint and earn USDC`);
-    console.log(DIM + `\n  Add --json to any command for machine-readable output.` + RESET);
+    console.log(DIM + `\n  --json: machine-readable output for discover, search, call, stats, trial, wallet.` + RESET);
     console.log(DIM + `  ${BASE} — pay-per-call x402 APIs, USDC on Base, 5 free trials per wallet` + RESET);
   } else {
     console.log(RED + `\n  Unknown command: ${cmd}` + RESET);

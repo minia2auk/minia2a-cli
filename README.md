@@ -35,10 +35,10 @@ minia2a stats
 |---------|-------------|
 | `discover [--all] [--json]` | Browse the service catalog |
 | `search <words> [--limit N] [--json]` | Find endpoints by intent; relaxes the words client-side when the exact phrase matches nothing, and says which phrase matched |
-| `trial <service> [--input '{...}']` | Call a service with one of your 5 free trial calls |
+| `trial <service> [--input '{...}'] [--json]` | Call a service with one of your 5 free trial calls; prints how many this wallet has left, read from the gateway's `x-trial-remaining` header |
 | `call <service> [--json]` | Show price, endpoint and trial count for a service |
 | `stats [--json]` | Live platform statistics |
-| `wallet` | Show your local wallet and how payment works |
+| `wallet [--json]` | Show your local wallet (address, key file, trial allowance) and how payment works |
 | `register` | List your own endpoint on the marketplace |
 | `help` | Show usage |
 
