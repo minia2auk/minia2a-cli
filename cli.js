@@ -238,12 +238,39 @@ async function main() {
     if (JSON_MODE) { console.log(JSON.stringify(d, null, 2)); return; }
     console.log(BOLD + '\n  minia2a.uk — Platform Stats' + RESET);
     console.log(DIM + '  Live data from ' + BASE + '/api/stats\n' + RESET);
-    console.log(`  ${BOLD}Services:${RESET}        ${GREEN}${d.services}${RESET}`);
-    console.log(`  ${BOLD}Free Trials:${RESET}     ${CYAN}${d.trials?.totalUsed?.toLocaleString() || 0}${RESET} (${d.trials?.totalUniqueUsers || 0} agents)`);
-    console.log(`  ${BOLD}Total Requests:${RESET}  ${d.totalRequests?.toLocaleString()}`);
-    console.log(`  ${BOLD}Wallets:${RESET}         ${d.trials?.walletUsers || 0}`);
+    // Labels here are the whole point of this block: every field below is a
+    // DIFFERENT denominator in /api/stats, and printing one under another's name
+    // is a false claim about the platform (2026-11-04).
+    //   · trials.totalUniqueUsers  — distinct trial identities, NOT registered
+    //     agents. It is 20x `agents` because most identities are anonymous
+    //     callers and our own probes; it was printed as "N agents".
+    //   · agents / registration.totalUsers — the number the site itself calls
+    //     agents.
+    //   · uptime — seconds since the gateway PROCESS started, reset on every
+    //     restart. Flooring it to days printed "0 days" for a platform that had
+    //     been serving for months, which reads as downtime.
+    //   · totalRequests — inflated by bots and self-polling (the field's own
+    //     note in /api/stats says so), so it is labelled as such.
+    // Real adoption lives in realUsage, which is measured with our own wallets
+    // and probe digests excluded — that is the honest demand line.
+    const ru = d.realUsage || {};
+    const fmtUptime = (s) => {
+      const t = Number(s) || 0;
+      const days = Math.floor(t / 86400), hours = Math.floor((t % 86400) / 3600), mins = Math.floor((t % 3600) / 60);
+      if (days > 0) return `${days}d ${hours}h`;
+      if (hours > 0) return `${hours}h ${mins}m`;
+      return `${mins}m`;
+    };
+    console.log(`  ${BOLD}Services:${RESET}        ${GREEN}${(d.services || 0).toLocaleString()}${RESET}`);
+    console.log(`  ${BOLD}Agents:${RESET}          ${(d.agents ?? d.registration?.totalUsers ?? 0).toLocaleString()} registered`);
+    console.log(`  ${BOLD}Free Trials:${RESET}     ${CYAN}${(d.trials?.totalUsed || 0).toLocaleString()}${RESET} served (${(d.trials?.totalUniqueUsers || 0).toLocaleString()} trial identities)`);
+    if (ru.agentTrialWallets7d !== undefined || ru.agentPayingWallets7d !== undefined) {
+      const paying = ru.agentPayingWallets7d ?? 0, trialing = ru.agentTrialWallets7d ?? 0;
+      console.log(`  ${BOLD}Trial wallets (7d):${RESET} ${trialing} · ${BOLD}Paying wallets (7d):${RESET} ${paying}`);
+    }
+    console.log(`  ${BOLD}Total Requests:${RESET}  ${(d.totalRequests || 0).toLocaleString()} ${DIM}(includes bot/self traffic)${RESET}`);
     console.log(`  ${BOLD}Settled on-chain:${RESET} ${d.realOnChain?.count || 0} payments, $${(d.realOnChain?.usdc || 0).toFixed(2)} USDC`);
-    console.log(`  ${BOLD}Uptime:${RESET}         ${Math.floor((d.uptime || 0) / 86400)} days`);
+    console.log(`  ${BOLD}Gateway uptime:${RESET}  ${fmtUptime(d.uptime)} ${DIM}(process, since last restart)${RESET}`);
     console.log(BRAND);
   } else if (cmd === 'trial') {
     const svcName = process.argv[3];
