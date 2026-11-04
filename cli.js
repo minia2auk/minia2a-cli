@@ -175,7 +175,15 @@ async function main() {
     const li = argv.indexOf('--limit');
     let limit = 10;
     if (li !== -1) { limit = Math.max(1, parseInt(argv[li + 1], 10) || 10); argv.splice(li, 2); }
-    const words = argv.filter(a => !a.startsWith('--'));
+    // Split inside an argument too: the help text recommends the quoted form
+    // (`search "url shortener"`), which arrives as ONE argv element. Until
+    // 2026-11-04 the relaxation below only ran when the words came as separate
+    // arguments, so the quoted form -- the one we advertise -- returned an
+    // empty list and exit 1 for every phrasing the catalog spells differently,
+    // while the unquoted form of the same intent found the endpoint.
+    const words = argv.filter(a => !a.startsWith('--'))
+      .flatMap(a => a.trim().split(/\s+/))
+      .filter(Boolean);
     if (!words.length) {
       console.log(BOLD + '\n  Usage:' + RESET + ' minia2a search <words> [--limit N]');
       console.log(DIM + '  Finds endpoints by what you want to do, in plain words.\n' + RESET);
