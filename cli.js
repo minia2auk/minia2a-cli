@@ -241,9 +241,13 @@ async function main() {
     // Labels here are the whole point of this block: every field below is a
     // DIFFERENT denominator in /api/stats, and printing one under another's name
     // is a false claim about the platform (2026-11-04).
-    //   · trials.totalUniqueUsers  — distinct trial identities, NOT registered
-    //     agents. It is 20x `agents` because most identities are anonymous
-    //     callers and our own probes; it was printed as "N agents".
+    //   · trials.totalUniqueUsers  — COUNT(DISTINCT ip) over trial rows with the
+    //     three reserved probe digests excluded (handler_stats.go:185). It is a
+    //     count of source ADDRESSES, not agents, not wallets, not users: one
+    //     machine behind one IP contributes 1 no matter how many agents it runs,
+    //     and a proxy pool contributes one per exit. It was printed as "N agents"
+    //     and then as "N trial identities"; both named a thing the query never
+    //     measured.
     //   · agents / registration.totalUsers — the number the site itself calls
     //     agents.
     //   · uptime — seconds since the gateway PROCESS started, reset on every
@@ -263,7 +267,7 @@ async function main() {
     };
     console.log(`  ${BOLD}Services:${RESET}        ${GREEN}${(d.services || 0).toLocaleString()}${RESET}`);
     console.log(`  ${BOLD}Agents:${RESET}          ${(d.agents ?? d.registration?.totalUsers ?? 0).toLocaleString()} registered`);
-    console.log(`  ${BOLD}Free Trials:${RESET}     ${CYAN}${(d.trials?.totalUsed || 0).toLocaleString()}${RESET} served (${(d.trials?.totalUniqueUsers || 0).toLocaleString()} trial identities)`);
+    console.log(`  ${BOLD}Free Trials:${RESET}     ${CYAN}${(d.trials?.totalUsed || 0).toLocaleString()}${RESET} served (from ${(d.trials?.totalUniqueUsers || 0).toLocaleString()} distinct IPs)`);
     if (ru.agentTrialWallets7d !== undefined || ru.agentPayingWallets7d !== undefined) {
       const paying = ru.agentPayingWallets7d ?? 0, trialing = ru.agentTrialWallets7d ?? 0;
       console.log(`  ${BOLD}Trial wallets (7d):${RESET} ${trialing} · ${BOLD}Paying wallets (7d):${RESET} ${paying}`);
