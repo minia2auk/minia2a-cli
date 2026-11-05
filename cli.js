@@ -110,6 +110,41 @@ function post(url, body, extraHeaders = {}) {
   });
 }
 
+// A raw request that keeps the header array, not just the object: `budget` needs
+// each field's ORIGINAL name and its byte length. Node lowercases `res.headers`,
+// which is fine for lookups but loses the wire spelling the client measures.
+function rawRequest(target, method) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(target);
+    const mod = u.protocol === 'http:' ? require('http') : https;
+    const payload = method === 'POST' ? '{}' : null;
+    const options = {
+      method,
+      headers: { ...baseHeaders(target), 'Accept': 'application/json' },
+    };
+    if (payload) {
+      options.headers['Content-Type'] = 'application/json';
+      options.headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const req = mod.request(u, options, res => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        statusMessage: res.statusMessage,
+        // [name, value, name, value, ...] exactly as they arrived.
+        rawHeaders: res.rawHeaders,
+        body,
+      }));
+    });
+    req.on('error', reject);
+    // A seller that streams a large 402 body should not hang the check.
+    req.setTimeout(20000, () => req.destroy(new Error('timed out after 20s')));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 // ── Wallet ───────────────────────────────────────────────────────────
 // Trials are wallet-based: sign with your own key and you get 5 free calls across
 // the catalog, no registration. The key never leaves this process. It persists
@@ -535,16 +570,142 @@ async function main() {
       console.log(DIM + `  → Wallet + payment: minia2a wallet` + RESET);
       console.log(BRAND);
     }
+  } else if (cmd === 'budget') {
+    // The 402 travels in ONE response header, and the client caps header size
+    // before the caller ever sees the payment document. aiohttp rejects a field
+    // over 8,190 bytes ("Got more than 8190 bytes when reading"); Node/undici
+    // rejects the whole block over 16,384 (UND_ERR_HEADERS_OVERFLOW). Neither
+    // error names the seller, so a quote that outgrows the cap reads as "this
+    // endpoint is down". This prints the numbers the client actually checks,
+    // against any URL — ours or a third-party seller's, no wallet involved.
+    const target = process.argv.slice(3).find(a => !a.startsWith('--'));
+    const usePost = process.argv.includes('--post');
+    if (!target) {
+      console.log(BOLD + '\n  Usage:' + RESET + ' minia2a budget <url> [--post] [--json]');
+      console.log(DIM + '  Sends one unpaid request and measures the PAYMENT-REQUIRED header\n  against the client limits that silently drop an oversized challenge.\n' + RESET);
+      console.log('  Example: minia2a budget https://minia2a.uk/x402/x402-time');
+      process.exit(1);
+    }
+    let targetUrl;
+    try { targetUrl = new URL(target); } catch (e) { targetUrl = null; }
+    if (!targetUrl || !/^https?:$/.test(targetUrl.protocol)) {
+      console.log(RED + `  Not an http(s) URL: ${target}` + RESET);
+      process.exit(1);
+    }
+    const res = await rawRequest(targetUrl.href, usePost ? 'POST' : 'GET');
+    // Case-insensitively, but keep the wire name: its length is part of the
+    // limit. (Every parser counts the name; only the compiled aiohttp parser's
+    // pre-fix first-position path did not, which is the row we do not rely on.)
+    let wireName = null, wireValue = null, blockBytes = 0;
+    for (let i = 0; i + 1 < res.rawHeaders.length; i += 2) {
+      const n = String(res.rawHeaders[i]), v = String(res.rawHeaders[i + 1]);
+      blockBytes += Buffer.byteLength(n) + 2 + Buffer.byteLength(v) + 2;
+      if (n.toLowerCase() === 'payment-required') { wireName = n; wireValue = v; }
+    }
+    if (!wireName) {
+      console.log(BOLD + `\n  ${targetUrl.href}` + RESET);
+      console.log(`  HTTP ${res.status} — no PAYMENT-REQUIRED header in the response.`);
+      console.log(DIM + '  Nothing to budget: either this is not an x402 endpoint, or the\n  request was answered without a challenge (already paid, wrong method).\n' + RESET);
+      if (res.status !== 402) process.exit(2);
+      process.exit(1);
+    }
+    // Limits, all in bytes, from the client implementations rather than docs:
+    //   aiohttp 3.13.5/3.14.5, pure-Python  — header line (name + ": " + value) <= 8,190
+    //   aiohttp same versions, compiled     — name + value <= 8,190 (the tight row;
+    //                                         pre-fix it only counts the name in
+    //                                         the first position, so budget this one)
+    //   Node/undici default maxHeaderSize   — whole block <= 16,384
+    const LIMITS = [
+      { who: 'aiohttp (pure-Python) line', bytes: 8190, measure: 'line' },
+      { who: 'aiohttp (compiled) name + value', bytes: 8190, measure: 'nameValue' },
+      { who: 'Node/undici header block', bytes: 16384, measure: 'block' },  // fields only; undici also counts the status line (~30 B)
+    ];
+    const nameBytes = Buffer.byteLength(wireName);
+    const valueBytes = Buffer.byteLength(wireValue);
+    const lineBytes = nameBytes + 2 + valueBytes;
+    const nameValueBytes = nameBytes + valueBytes;
+    const rows = LIMITS.map(l => {
+      const used = l.measure === 'line' ? lineBytes : l.measure === 'nameValue' ? nameValueBytes : blockBytes;
+      return { ...l, used, pass: used <= l.bytes, headroom: l.bytes - used };
+    });
+
+    // Decode to show where the weight is. The document is base64 of compact
+    // JSON, so the encoded value is 4/3 of it: the document that just fits is
+    // floor((8,190 - name - 2) * 3/4) bytes — 6,129 for a 16-byte name.
+    let doc = null, docText = null;
+    try {
+      docText = Buffer.from(wireValue, 'base64').toString('utf8');
+      doc = JSON.parse(docText);
+    } catch (e) { /* not base64 JSON — still measurable by bytes */ }
+    const docBytes = docText === null ? null : Buffer.byteLength(docText);
+    const fitsDoc = Math.floor((8190 - nameBytes - 2) * 3 / 4);
+    // Heaviest top-level fields. `accepts` carries the price; in an oversized
+    // challenge it is almost never the term that grew.
+    let fields = [];
+    if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
+      fields = Object.keys(doc).map(k => {
+        let b;
+        try { b = Buffer.byteLength(JSON.stringify(doc[k] === undefined ? null : doc[k])); } catch (e) { b = 0; }
+        return { key: k, bytes: b };
+      }).sort((a, b) => b.bytes - a.bytes);
+    }
+    const allPass = rows.every(r => r.pass);
+    const fmt = n => n.toLocaleString('en-US');
+
+    if (JSON_MODE) {
+      console.log(JSON.stringify({
+        url: targetUrl.href,
+        status: res.status,
+        method: usePost ? 'POST' : 'GET',
+        header: { name: wireName, nameBytes, valueBytes, lineBytes, nameValueBytes, blockBytes },
+        documentBytes: docBytes,
+        documentFitsAtThisName: fitsDoc,
+        limits: rows.map(r => ({ name: r.who, limit: r.bytes, used: r.used, pass: r.pass, headroom: r.headroom })),
+        heaviestFields: fields.slice(0, 8),
+        ok: allPass,
+      }, null, 2));
+      if (!allPass) process.exit(1);
+      return;
+    }
+
+    console.log(BOLD + `\n  ${targetUrl.href}` + RESET);
+    console.log(`  HTTP ${res.status} · ${usePost ? 'POST' : 'GET'} · ${wireName} ${fmt(valueBytes)} B`);
+    console.log(DIM + `  line ${fmt(lineBytes)} B = name ${nameBytes} + ": " (2) + value ${fmt(valueBytes)}` + RESET);
+    for (const r of rows) {
+      const verdict = r.pass ? GREEN + 'PASS' + RESET : RED + 'FAIL' + RESET;
+      const tail = r.pass
+        ? DIM + `${fmt(r.headroom)} B headroom` + RESET
+        : RED + `over by ${fmt(-r.headroom)} B` + RESET;
+      console.log(`  ${verdict}  ${r.who.padEnd(38)} ${fmt(r.used)} / ${fmt(r.bytes)} B   ${tail}`);
+    }
+    if (docBytes !== null) {
+      console.log(DIM + `\n  document ${fmt(docBytes)} B — at this name the largest document that fits is ${fmt(fitsDoc)} B` + RESET);
+    }
+    if (fields.length) {
+      console.log(BOLD + '\n  heaviest fields' + RESET);
+      for (const f of fields.slice(0, 5)) {
+        const pct = docBytes ? Math.round(f.bytes / docBytes * 100) : 0;
+        console.log(`    ${String(f.bytes).padStart(6)} B  ${String(pct).padStart(3)}%  ${f.key}`);
+      }
+    }
+    if (!allPass) {
+      console.log(RED + '\n  A client will drop this response before your code sees it.' + RESET);
+      console.log(DIM + '  The fix is on the seller side: shrink extensions.bazaar examples or the\n  schema until the encoded line fits. Retrying or raising a client limit does\n  not help the buyers who already run the default.\n' + RESET);
+    } else {
+      console.log(DIM + `\n  Every measured client limit is satisfied with the field as sent.\n  ${BRAND}` + RESET);
+    }
+    if (!allPass) process.exit(1);
   } else if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(BOLD + '\n  ⚡ minia2a' + RESET + DIM + ' — CLI for the agent-to-agent API marketplace\n' + RESET);
     console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--all, --json]`);
     console.log(`  ${BOLD}minia2a search <words>${RESET} Find endpoints by intent [--limit N, --json]`);
     console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}', --json]`);
     console.log(`  ${BOLD}minia2a call <name>${RESET}     Show service details [--json]`);
+    console.log(`  ${BOLD}minia2a budget <url>${RESET}    Measure an x402 challenge against client header limits`);
     console.log(`  ${BOLD}minia2a stats${RESET}          Live platform stats [--json]`);
     console.log(`  ${BOLD}minia2a wallet${RESET}         Your local wallet + how payment works [--json]`);
     console.log(`  ${BOLD}minia2a register${RESET}       List your own endpoint and earn USDC`);
-    console.log(DIM + `\n  --json: machine-readable output for discover, search, call, stats, trial, wallet.` + RESET);
+    console.log(DIM + `\n  --json: machine-readable output for discover, search, call, budget, stats, trial, wallet.` + RESET);
     console.log(DIM + `  ${BASE} — pay-per-call x402 APIs, USDC on Base, 5 free trials per wallet` + RESET);
   } else {
     console.log(RED + `\n  Unknown command: ${cmd}` + RESET);
