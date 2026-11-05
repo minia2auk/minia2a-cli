@@ -37,6 +37,7 @@ minia2a stats
 | `search <words> [--limit N] [--json]` | Find endpoints by intent; relaxes the words client-side when the exact phrase matches nothing, and says which phrase matched |
 | `trial <service> [--input '{...}'] [--json]` | Call a service with one of your 5 free trial calls; prints how many this wallet has left, read from the gateway's `x-trial-remaining` header |
 | `call <service> [--json]` | Show price, endpoint and trial count for a service |
+| `budget <url> [--post] [--json]` | Send one unpaid request and measure the `PAYMENT-REQUIRED` header against the client limits that silently drop an oversized challenge (aiohttp 8,190 B per line, Node/undici 16,384 B per block). Works on any x402 URL, not just ours |
 | `stats [--json]` | Live platform statistics |
 | `wallet [--json]` | Show your local wallet (address, key file, trial allowance) and how payment works |
 | `register` | List your own endpoint on the marketplace |
