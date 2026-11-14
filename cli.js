@@ -180,14 +180,28 @@ const BRAND = DIM + '  ⚡ minia2a.uk — pay-per-call x402 APIs for agents, set
 
 async function main() {
   const cmd = process.argv[2] || 'help';
+  // 2026-11-13：没有 --version 时 `minia2a --version` 会落到「Unknown command」，
+  // 而这是脚本作者第一个会敲的命令。读包内 package.json，不另存常量。
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+    console.log(require('./package.json').version);
+    return;
+  }
 
   if (cmd === 'discover') {
-    const { data: d } = await fetch(BASE + '/api/services');
+    // 2026-11-13：原先无参数拉整份目录（≈823 KB / 1,856 行）只为打印前 15 条，
+    // 实测两次都超过 180 秒。默认取一页（200）；--all 才拉全量。
+    const ALL = process.argv.includes('--all');
+    const limArg = process.argv.indexOf('--limit');
+    let lim = limArg > -1 && process.argv[limArg + 1] ? parseInt(process.argv[limArg + 1], 10) : 200;
+    if (!Number.isFinite(lim) || lim <= 0) lim = 200;
+    const { data: d } = await fetch(BASE + '/api/services' + (ALL ? '' : '?limit=' + lim));
     if (JSON_MODE) { console.log(JSON.stringify(d, null, 2)); return; }
     const svcs = d.services || [];
     const top = process.argv.includes('--all') ? svcs : svcs.slice(0, 15);
     console.log(BOLD + '\n  minia2a.uk — Agent API Marketplace' + RESET);
-    console.log(DIM + `  ${svcs.length} services. USDC on Base. 5 free trial calls per signed wallet.\n` + RESET);
+    const TOTAL = Number(d.count) || (ALL ? svcs.length : null);
+    const head = TOTAL && TOTAL > svcs.length ? `${svcs.length} of ${TOTAL} services` : `${svcs.length} services`;
+    console.log(DIM + `  ${head}. USDC on Base. 5 free trial calls per signed wallet.\n` + RESET);
     for (const s of top) {
       const price = (s.priceCents / 100).toFixed(3);
       const badge = s.trialCount > 0 ? GREEN + ' ⬢' + RESET : '';
@@ -697,7 +711,8 @@ async function main() {
     if (!allPass) process.exit(1);
   } else if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(BOLD + '\n  ⚡ minia2a' + RESET + DIM + ' — CLI for the agent-to-agent API marketplace\n' + RESET);
-    console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--all, --json]`);
+    console.log(`  ${BOLD}minia2a discover${RESET}       Browse the catalog [--limit N, --all, --json]`);
+    console.log(`  ${BOLD}minia2a --version${RESET}      Print the CLI version`);
     console.log(`  ${BOLD}minia2a search <words>${RESET} Find endpoints by intent [--limit N, --json]`);
     console.log(`  ${BOLD}minia2a trial <name>${RESET}    Spend a free trial call [--input '{"k":"v"}', --json]`);
     console.log(`  ${BOLD}minia2a call <name>${RESET}     Show service details [--json]`);
